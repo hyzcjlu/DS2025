@@ -1,0 +1,306 @@
+#include <iostream>
+#include <fstream>
+#include <queue>
+#include <cstring>
+#include <cstdlib>
+#include <cctype>
+using namespace std;
+
+// 秩类型定义（与参考代码一致）
+typedef size_t Rank;
+
+// 位图类（严格遵循参考代码实现）
+class Bitmap {
+private:
+    unsigned char* M;  // 存储位图的字节数组
+    Rank N;            // 字节数（N = (最大有效位 + 7) / 8）
+    Rank _sz;          // 有效位中为1的个数
+protected:
+    void init(Rank n) {
+        N = (n + 7) / 8;
+        M = new unsigned char[N];
+        memset(M, 0, N);
+        _sz = 0;
+    }
+    void expand(Rank k) {
+        if (k < 8 * N) return;
+        Rank oldN = N;
+        unsigned char* oldM = M;
+        init(2 * k);
+        memcpy(M, oldM, oldN * sizeof(unsigned char));
+        delete[] oldM;
+    }
+public:
+    Bitmap(Rank n = 8) { init(n); }
+    Bitmap(char* file, Rank n = 8) {
+        init(n);
+        FILE* fp = fopen(file, "rb");
+        if (fp) {
+            fread(M, sizeof(char), N, fp);
+            fclose(fp);
+        }
+        _sz = 0;
+        for (Rank k = 0; k < 8 * N; ++k) {
+            if (test(k)) _sz++;
+        }
+    }
+    ~Bitmap() {
+        delete[] M;
+        M = NULL;
+        N = _sz = 0;
+    }
+    Rank size() { return _sz; }
+    void set(Rank k) {
+        expand(k);
+        if (!test(k)) {
+            M[k >> 3] |= (0x80 >> (k & 0x07));
+            _sz++;
+        }
+    }
+    void clear(Rank k) {
+        expand(k);
+        if (test(k)) {
+            M[k >> 3] &= ~(0x80 >> (k & 0x07));
+            _sz--;
+        }
+    }
+    bool test(Rank k) {
+        expand(k);
+        return (M[k >> 3] & (0x80 >> (k & 0x07))) != 0;
+    }
+    void dump(char* file) {
+        FILE* fp = fopen(file, "wb");
+        if (fp) {
+            fwrite(M, sizeof(char), N, fp);
+            fclose(fp);
+        }
+    }
+    char* bits2string(Rank n) {
+        expand(n - 1);
+        char* s = new char[n + 1];
+        s[n] = '\0';
+        for (Rank i = 0; i < n; ++i) {
+            s[i] = test(i) ? '1' : '0';
+        }
+        return s;
+    }
+};
+
+// 定义Huffman编码类型
+typedef Bitmap HuffCode;
+
+// 二叉树节点结构
+template <typename T>
+struct BinTreeNode {
+    T data;
+    BinTreeNode<T>* left;
+    BinTreeNode<T>* right;
+    BinTreeNode(T val = T(), BinTreeNode* l = nullptr, BinTreeNode* r = nullptr)
+        : data(val), left(l), right(r) {}
+};
+
+// 二叉树类 BinTree
+template <typename T>
+class BinTree {
+public:
+    BinTreeNode<T>* root;
+    BinTree() : root(nullptr) {}
+    BinTree(BinTreeNode<T>* rt) : root(rt) {}
+    BinTree(const BinTree<T>& other) { root = copyTree(other.root); }
+    BinTree<T>& operator=(const BinTree<T>& other) {
+        if (this != &other) {
+            releaseTree(root);
+            root = copyTree(other.root);
+        }
+        return *this;
+    }
+    ~BinTree() { releaseTree(root); }
+private:
+    BinTreeNode<T>* copyTree(BinTreeNode<T>* node) {
+        if (!node) return nullptr;
+        BinTreeNode<T>* newNode = new BinTreeNode<T>(node->data);
+        newNode->left = copyTree(node->left);
+        newNode->right = copyTree(node->right);
+        return newNode;
+    }
+    void releaseTree(BinTreeNode<T>* node) {
+        if (!node) return;
+        releaseTree(node->left);
+        releaseTree(node->right);
+        delete node;
+    }
+};
+
+// Huffman树节点数据结构
+struct HuffNode {
+    char ch;
+    unsigned freq;
+    HuffNode(char c = '#', unsigned f = 0) : ch(c), freq(f) {}
+    bool operator<(const HuffNode& other) const {
+        return freq > other.freq;
+    }
+};
+
+// 构建Huffman树
+BinTree<HuffNode> buildHuffTree(const unsigned freq[26]) {
+    priority_queue<BinTreeNode<HuffNode>*> pq;
+    for (int i = 0; i < 26; ++i) {
+        if (freq[i] > 0) {
+            char ch = 'a' + i;
+            pq.push(new BinTreeNode<HuffNode>(HuffNode(ch, freq[i])));
+        }
+    }
+    while (pq.size() > 1) {
+        BinTreeNode<HuffNode>* leftNode = pq.top(); pq.pop();
+        BinTreeNode<HuffNode>* rightNode = pq.top(); pq.pop();
+        unsigned sumFreq = leftNode->data.freq + rightNode->data.freq;
+        BinTreeNode<HuffNode>* parentNode = new BinTreeNode<HuffNode>(
+            HuffNode('#', sumFreq), leftNode, rightNode
+        );
+        pq.push(parentNode);
+    }
+    return BinTree<HuffNode>(pq.empty() ? nullptr : pq.top());
+}
+
+// 生成Huffman编码
+void generateHuffCode(BinTreeNode<HuffNode>* node, HuffCode code[], Rank depth = 0) {
+    if (!node) return;
+    if (!node->left && !node->right) {
+        char ch = node->data.ch;
+        int idx = ch - 'a';
+        code[idx] = HuffCode(depth);
+        return;
+    }
+    if (node->left) {
+        generateHuffCode(node->left, code, depth + 1);
+        if (!node->left->left && !node->left->right) {
+            char ch = node->left->data.ch;
+            int idx = ch - 'a';
+            code[idx].clear(depth);
+        }
+    }
+    if (node->right) {
+        generateHuffCode(node->right, code, depth + 1);
+        if (!node->right->left && !node->right->right) {
+            char ch = node->right->data.ch;
+            int idx = ch - 'a';
+            code[idx].set(depth);
+        }
+    }
+}
+
+// 统计字母频率（纯英文路径，无编码问题）
+void countLetterFrequency(const char* filePath, unsigned freq[26]) {
+    memset(freq, 0, 26 * sizeof(unsigned));
+    FILE* fp = fopen(filePath, "r");  // 普通fopen，无中文路径问题
+    if (!fp) {
+        cerr << "Error: 无法打开文件！请确认文件路径正确：" << filePath << endl;
+        return;
+    }
+    int c;
+    while ((c = fgetc(fp)) != EOF) {
+        if (isalpha(c)) {
+            c = tolower(c);
+            freq[c - 'a']++;
+        }
+    }
+    fclose(fp);
+}
+
+// 单词编码
+char* encodeSingleWord(const char* word, HuffCode code[]) {
+    if (!word || word[0] == '\0') return nullptr;
+    Rank totalLen = 0;
+    for (Rank i = 0; word[i] != '\0'; ++i) {
+        char c = tolower(word[i]);
+        if (!isalpha(c)) {
+            cerr << "警告：忽略非字母字符 '" << word[i] << "'" << endl;
+            continue;
+        }
+        int idx = c - 'a';
+        totalLen += code[idx].size();
+    }
+    HuffCode totalCode(totalLen);
+    Rank currentPos = 0;
+    for (Rank i = 0; word[i] != '\0'; ++i) {
+        char c = tolower(word[i]);
+        if (!isalpha(c)) continue;
+        int idx = c - 'a';
+        Rank codeLen = code[idx].size();
+        for (Rank j = 0; j < codeLen; ++j) {
+            if (code[idx].test(j)) {
+                totalCode.set(currentPos + j);
+            }
+        }
+        currentPos += codeLen;
+    }
+    return totalCode.bits2string(totalLen);
+}
+
+int main() {
+    // #################### 关键修改：纯英文路径 ####################
+    // 1. 请在C盘根目录新建一个名为 "Huffman" 的文件夹（大写H，无空格）
+    // 2. 将 dream.txt 放入 C:\Huffman 文件夹中
+    const char* textFile = "C:\\Huffman\\dream.txt";
+    // #############################################################
+
+    unsigned letterFreq[26] = {0};
+    countLetterFrequency(textFile, letterFreq);
+
+    // 打印频率统计
+    cout << "《I Have a Dream》字母频率统计（前10个非零频率）：" << endl;
+    int printCount = 0;
+    for (int i = 0; i < 26; ++i) {
+        if (letterFreq[i] > 0 && printCount < 10) {
+            cout << (char)('a' + i) << ": " << letterFreq[i] << " 次" << endl;
+            printCount++;
+        }
+    }
+    cout << endl;
+
+    // 构建Huffman树
+    BinTree<HuffNode> huffmanTree = buildHuffTree(letterFreq);
+    if (!huffmanTree.root) {
+        cerr << "错误：无法构建Huffman树！请检查：" << endl;
+        cerr << "1. C:\\Huffman 文件夹中是否存在 dream.txt" << endl;
+        cerr << "2. dream.txt 中是否有英文内容（字母）" << endl;
+        return 1;
+    }
+
+    // 生成编码
+    HuffCode huffmanCode[26];
+    generateHuffCode(huffmanTree.root, huffmanCode);
+
+    // 打印部分编码
+    cout << "部分字母的Huffman编码（高位在前）：" << endl;
+    char testLetters[] = {'a', 'b', 'd', 'e', 'f', 'h', 'm', 'r', 's', 't'};
+    for (char c : testLetters) {
+        int idx = c - 'a';
+        if (letterFreq[idx] > 0) {
+            char* codeStr = huffmanCode[idx].bits2string(huffmanCode[idx].size());
+            cout << c << ": " << codeStr << " （长度：" << huffmanCode[idx].size() << "）" << endl;
+            delete[] codeStr;
+        }
+    }
+    cout << endl;
+
+    // 单词编码
+    const char* targetWords[] = {
+        "dream", "freedom", "justice", "equality", 
+        "hope", "love", "peace", "nation", "people", nullptr
+    };
+    cout << "目标单词的Huffman编码结果：" << endl;
+    for (int i = 0; targetWords[i] != nullptr; ++i) {
+        char* codeStr = encodeSingleWord(targetWords[i], huffmanCode);
+        cout << targetWords[i] << ": " << (codeStr ? codeStr : "编码失败") << endl;
+        delete[] codeStr;
+    }
+
+    // 保存编码文件
+    char* dCode = huffmanCode['d' - 'a'].bits2string(huffmanCode['d' - 'a'].size());
+    cout << "\n字母'd'的编码（" << dCode << "）已保存至 C:\\Huffman\\d_huffcode.bin" << endl;
+    huffmanCode['d' - 'a'].dump(const_cast<char*>("C:\\Huffman\\d_huffcode.bin"));
+    delete[] dCode;
+
+    return 0;
+}
